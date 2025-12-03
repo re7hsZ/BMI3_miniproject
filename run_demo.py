@@ -10,7 +10,7 @@ from pathlib import Path
 
 DEMO_DATA_DIR = Path("data/synthetic_eval/demo")
 DEMO_RESULTS_DIR = Path("results/synthetic_eval/demo/latest")
-BENCHMARK_SCRIPT = Path("src/benchmark_optimized2.py")
+BENCHMARK_SCRIPT = Path("src/benchmark.py")
 
 
 def run_command(cmd, description):
@@ -46,7 +46,7 @@ def main():
     print("  - Creating host genes (GC=0.4, n=200)")
     print("  - Creating foreign genes (GC=0.6, n=200)")
 
-    from src.simulator_optimized2 import generate_dataset
+    from src.simulator import generate_dataset
     from Bio.Seq import Seq
     from Bio.SeqRecord import SeqRecord
     from Bio import SeqIO

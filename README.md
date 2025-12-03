@@ -24,11 +24,11 @@ Outputs: `results/synthetic_eval/demo/latest/` (model, predictions, plots)
 ## Project Structure
 ```
 miniproject/
-├── src/                         # Core code (optimized2 is the default)
-│   ├── features_optimized2.py
-│   ├── hmm_optimized2.py
-│   ├── simulator_optimized2.py
-│   ├── benchmark_optimized2.py
+├── src/                         # Core code (latest, no suffix)
+│   ├── features.py
+│   ├── hmm.py
+│   ├── simulator.py
+│   ├── benchmark.py
 │   └── main.py                  # CLI for train/predict/simulate
 ├── data/
 │   ├── raw/                     # Real CDS inputs
@@ -56,7 +56,7 @@ python src/main.py predict \
     --model results/synthetic_eval/demo/latest/model.pkl \
     --output results/synthetic_eval/demo/latest/predictions.tsv
 
-python src/benchmark_optimized2.py \
+python src/benchmark.py \
     --predictions results/synthetic_eval/demo/latest/predictions.tsv \
     --output results/synthetic_eval/demo/latest \
     --fasta data/synthetic_eval/demo/test_genome.fasta
@@ -82,7 +82,7 @@ python src/main.py predict \
     --output results/real/predictions.tsv \
     --foreign_threshold 0.5
 
-python src/benchmark_optimized2.py \
+python src/benchmark.py \
     --predictions results/real/predictions.tsv \
     --truth data/processed/hgt_truth.tsv \
     --output results/real \
@@ -95,9 +95,9 @@ Notes:
 - `simulate` supports `--phylo_scenario {near,mid,far}` to choose GC targets matching biologically plausible donors.
 
 ## Customization
-- Transition/context weights: `src/hmm_optimized2.py`
-- Feature thresholds/PCA components: `src/features_optimized2.py`
-- Simulation GC targets/islands: `src/simulator_optimized2.py`
+- Transition/context weights: `src/hmm.py`
+- Feature thresholds/PCA components: `src/features.py`
+- Simulation GC targets/islands: `src/simulator.py`
 
 ## Output Format
 `predictions.tsv`: GeneID, State (0/1/2), Prob_Host, Prob_Ameliorated, Prob_Foreign, ForeignFlag

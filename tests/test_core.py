@@ -6,8 +6,8 @@ import numpy as np
 # Add src to path
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from features_optimized2 import calculate_gc_content, calculate_rscu_dict
-from hmm_optimized2 import HMM
+from features import calculate_gc_content, calculate_rscu_dict
+from hmm import HMM
 
 
 class TestFeatures(unittest.TestCase):

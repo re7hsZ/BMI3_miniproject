@@ -26,7 +26,7 @@ The core algorithm is a 3-state Hidden Markov Model (HMM).
 - **Training**: The model parameters (means, covariances) are initialized using supervised learning on reference datasets (Host vs Foreign) and can be further refined.
 
 ## 4. Benchmark
-The tool includes a benchmarking script (`src/benchmark_optimized2.py`) that evaluates performance using simulated or real datasets.
+The tool includes a benchmarking script (`src/benchmark.py`) that evaluates performance using simulated or real datasets.
 - **Metrics**: Confusion Matrix, ROC AUC, Precision, Recall, F1-score.
 - **Visualization**:
     - **ROC Curve**: Shows the trade-off between True Positive Rate and False Positive Rate.
@@ -66,7 +66,7 @@ Manual steps (synthetic example):
   ```
 - **Benchmark**:
   ```bash
-  python src/benchmark_optimized2.py \
+  python src/benchmark.py \
       --predictions results/synthetic_eval/demo/latest/predictions.tsv \
       --output results/synthetic_eval/demo/latest \
       --fasta data/synthetic_eval/demo/test_genome.fasta
@@ -95,7 +95,7 @@ Manual steps (real data):
   ```
 - **Benchmark (with truth)**:
   ```bash
-  python src/benchmark_optimized2.py \
+  python src/benchmark.py \
       --predictions results/real/predictions.tsv \
       --truth data/processed/hgt_truth.tsv \
       --output results/real \

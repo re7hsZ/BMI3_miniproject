@@ -4,9 +4,9 @@ import pickle
 from Bio import SeqIO
 from sklearn.preprocessing import StandardScaler
 
-from features_optimized2 import extract_features
-from hmm_optimized2 import HMM
-from simulator_optimized2 import PHYLO_SCENARIOS
+from features import extract_features
+from hmm import HMM
+from simulator import PHYLO_SCENARIOS
 
 
 def load_sequences(fasta_file):
@@ -61,7 +61,7 @@ def train_model(host_file, foreign_file, output_model):
 
 def simulate_genome(host_fasta, foreign_fasta, output_fasta, num_islands=5, phylo_scenario="mid"):
     """Testing-time synthetic genome with foreign inserts; training should use original genome files."""
-    from simulator_optimized2 import create_genome_from_fasta
+    from simulator import create_genome_from_fasta
     from Bio.SeqRecord import SeqRecord
     from Bio.Seq import Seq
 

@@ -4,8 +4,8 @@ import sys
 # Add src to the path for local imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from features_optimized2 import FeaturePipeline
-from hmm_optimized2 import HMM
+from features import FeaturePipeline
+from hmm import HMM
 
 
 def main():
