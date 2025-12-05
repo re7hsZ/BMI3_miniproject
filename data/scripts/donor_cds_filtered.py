@@ -1,20 +1,38 @@
-from Bio import SeqIO
-import random
+import argparse
 import csv
+import os
+import random
+from Bio import SeqIO
 
-CDS_FILE = "./data/raw/near_cds_from_genomic.fna"  # 输入：外源CDS文件（FASTA格式）
-HOST_TEST_FILE = "./data/processed/host/host_core_test_empty.fasta"  # 宿主空白测试集
-OUTPUT_FILTERED = "./data/processed/donor/foreign_filtered_cds.fasta"  # 输出：预处理后完整外源CDS结果
-OUTPUT_TRAIN = "./data/processed/donor/foreign_train.fasta"  # 输出：外源训练集
-OUTPUT_TEST = "./data/processed/donor/foreign_test.fasta"    # 输出：外源测试集
-OUTPUT_IDS = "./data/processed/donor/foreign_filtered_ids.txt"  # 输出：预处理后外源CDS的ID列表
-OUTPUT_HOST_HGT = "./data/processed/host_test_with_hgt.fasta"  # 插入HGT后的宿主测试集
-OUTPUT_METADATA = "./data/processed/hgt_insert_metadata.csv"  # 插入信息metadata表格
-OUTPUT_TRUTH = "./data/processed/hgt_truth.tsv"  # 标签TSV：GeneID / TrueState(0=host,2=foreign)
+# Map distance label to raw donor CDS file
+DONOR_RAW_MAP = {
+    "near": "./data/raw/near_cds_from_genomic.fna",
+    "moderate": "./data/raw/moderate_cds_from_genomic.fna",
+    "distant": "./data/raw/distant_cds_from_genomic.fna",
+}
 
-MIN_CDS_LENGTH = 150  # 最小CDS长度（bp）
-N_EVAL_THRESHOLD = 0.05  # N碱基占比阈值（>5%则剔除）
+HOST_TEST_FILE = "./data/processed/host/host_core_test_empty.fasta"
+OUTPUT_DIR_TEMPLATE = "./data/processed/{distance}"
+OUTPUT_FILTERED_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/donor/foreign_filtered_cds.fasta"
+OUTPUT_TRAIN_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/donor/foreign_train.fasta"
+OUTPUT_TEST_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/donor/foreign_test.fasta"
+OUTPUT_IDS_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/donor/foreign_filtered_ids.txt"
+OUTPUT_HOST_HGT_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/host_test_with_hgt.fasta"
+OUTPUT_METADATA_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/hgt_insert_metadata.csv"
+OUTPUT_TRUTH_TEMPLATE = OUTPUT_DIR_TEMPLATE + "/hgt_truth.tsv"
+
+MIN_CDS_LENGTH = 150
+N_EVAL_THRESHOLD = 0.05
 VALID_NUCLEOTIDES = {"A", "T", "G", "C", "a", "t", "g", "c"}
+
+TRAIN_TEST_RATIO = 3  # 3:1 split
+RANDOM_SEED = 42
+
+INSERT_LENGTH_MIN = 150  # lengthened inserts to amplify foreign signal
+INSERT_LENGTH_MAX = 600
+FRAME_SHIFT_RATIO = 0.15
+INSERT_PROB = 0.8       # insert HGT into 80% of host test CDS
+AVOID_REGION = 20       # allow more placement while avoiding edges
 
 mobile_keywords = [
     "transposase", "insertion sequence", "IS element", "insertion element",
@@ -30,23 +48,13 @@ mobile_keywords = [
     "HGT", "mobile region", "MGI", "CRISPR", "Cas"
 ]
 
-TRAIN_TEST_RATIO = 3 # 训练：测试=3: 1
-RANDOM_SEED = 42  # 固定种子，确保拆分结果可复现
 
-INSERT_LENGTH_MIN = 50  # 插入片段最小长度（bp）
-INSERT_LENGTH_MAX = 300  # 插入片段最大长度（bp）
-FRAME_SHIFT_RATIO = 0.15  # 15%的插入片段为非3倍数（模拟移码突变）
-INSERT_PROB = 0.5  # 50%的宿主测试集CDS插入HGT（HGT概率）
-AVOID_REGION = 50  # 避开起始密码子后/终止密码子前50bp
+def ensure_dirs(paths):
+    for p in paths:
+        os.makedirs(os.path.dirname(p), exist_ok=True)
 
-# -------------------------------------------------------------------
 
-def split_train_test(filtered_records):
-    """
-    3:1比例拆分训练集和测试集，均保留完整CDS
-    filtered_records：预处理后的外源CDS序列列表（SeqRecord对象）
-    """
-
+def split_train_test(filtered_records, output_train, output_test):
     total_count = len(filtered_records)
     print(f"Total number of core CDS: {total_count}")
 
@@ -55,21 +63,19 @@ def split_train_test(filtered_records):
 
     train_count = int(total_count * TRAIN_TEST_RATIO / (TRAIN_TEST_RATIO + 1))
     test_count = total_count - train_count
-    
+
     train_records = filtered_records[:train_count]
     test_records = filtered_records[train_count:]
 
-    SeqIO.write(train_records, OUTPUT_TRAIN, "fasta")
-    SeqIO.write(test_records, OUTPUT_TEST, "fasta")
+    SeqIO.write(train_records, output_train, "fasta")
+    SeqIO.write(test_records, output_test, "fasta")
 
-    print(f"Train(3/4): {len(train_records)} CDS → {OUTPUT_TRAIN}")
-    print(f"Test(1/4): {len(test_records)} CDS→ {OUTPUT_TEST}")
+    print(f"Train(3/4): {len(train_records)} CDS -> {output_train}")
+    print(f"Test(1/4): {len(test_records)} CDS -> {output_test}")
+
 
 def generate_insert_fragments(foreign_test_file):
-    """
-    从外源测试集生成插入片段（遵循规则：50-300bp，15%非3倍数）
-    返回：插入片段列表（含片段序列、来源ID、长度、是否移码）
-    """
+    print(f"[DEBUG] generate_insert_fragments: loading {foreign_test_file}")
     foreign_records = list(SeqIO.parse(foreign_test_file, "fasta"))
     insert_fragments = []
     random.seed(RANDOM_SEED)
@@ -77,15 +83,20 @@ def generate_insert_fragments(foreign_test_file):
     for foreign_rec in foreign_records:
         foreign_seq = foreign_rec.seq
         foreign_len = len(foreign_seq)
-        
         if foreign_len < INSERT_LENGTH_MIN:
             continue
-        
+
         if random.random() < FRAME_SHIFT_RATIO:
             max_possible_len = min(INSERT_LENGTH_MAX, foreign_len)
+            # avoid infinite loop when bounds are equal and divisible by 3
+            attempts = 0
             insert_len = random.randint(INSERT_LENGTH_MIN, max_possible_len)
-            while insert_len % 3 == 0:
+            while insert_len % 3 == 0 and attempts < 20:
                 insert_len = random.randint(INSERT_LENGTH_MIN, max_possible_len)
+                attempts += 1
+            if insert_len % 3 == 0:
+                # force a non-multiple-of-3 length
+                insert_len = max(INSERT_LENGTH_MIN, min(max_possible_len, insert_len - 1))
         else:
             max_possible_len = min(INSERT_LENGTH_MAX, foreign_len)
             max_3x_len = (max_possible_len // 3) * 3
@@ -96,7 +107,7 @@ def generate_insert_fragments(foreign_test_file):
 
         max_start = foreign_len - insert_len
         start_pos = random.randint(0, max_start)
-        insert_seq = foreign_seq[start_pos:start_pos+insert_len]
+        insert_seq = foreign_seq[start_pos:start_pos + insert_len]
 
         insert_fragments.append({
             "seq": insert_seq,
@@ -106,15 +117,14 @@ def generate_insert_fragments(foreign_test_file):
             "start_in_foreign": start_pos,
             "foreign_original_len": foreign_len
         })
-    
+
     print(f"Generated {len(insert_fragments)} insert fragments (15% frame-shift)")
+    print("[DEBUG] generate_insert_fragments: done")
     return insert_fragments
 
+
 def insert_hgt_into_host(host_test_file, insert_fragments):
-    """
-    将外源片段插入宿主测试集
-    返回：插入后的宿主序列列表 + metadata信息列表
-    """
+    print(f"[DEBUG] insert_hgt_into_host: loading {host_test_file} with {len(insert_fragments)} fragments")
     host_records = list(SeqIO.parse(host_test_file, "fasta"))
     inserted_host_records = []
     metadata_list = []
@@ -135,7 +145,7 @@ def insert_hgt_into_host(host_test_file, insert_fragments):
         if random.random() < INSERT_PROB:
             fragment = random.choice(insert_fragments)
             insert_len = fragment["insert_len"]
-            
+
             required_min_len = AVOID_REGION * 2 + insert_len
             if host_len < required_min_len:
                 reason = "host_cds_too_short_for_insert"
@@ -180,22 +190,23 @@ def insert_hgt_into_host(host_test_file, insert_fragments):
             "host_final_length": host_final_length,
             "foreign_original_len": fragment["foreign_original_len"] if has_hgt == "yes" else ""
         })
-    
+
     inserted_count = sum(1 for meta in metadata_list if meta["has_hgt"] == "yes")
     total_host = len(host_records)
     frame_shift_count = sum(1 for meta in metadata_list if meta["is_frame_shift"] is True)
     print(f"Inserted HGT into {inserted_count}/{total_host} host CDS")
     print(f"Frame-shift insertions: {frame_shift_count}/{inserted_count} (15% target)")
+    print("[DEBUG] insert_hgt_into_host: done")
     return inserted_host_records, metadata_list
 
+
 def write_metadata(metadata_list, output_file):
-    """将插入信息写入metadata表格（CSV格式）"""
     headers = [
         "host_id", "has_hgt", "reason", "foreign_source_id",
         "insert_length", "is_frame_shift", "insert_position",
         "host_original_length", "host_final_length", "foreign_original_len"
     ]
-    
+
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=headers)
         writer.writeheader()
@@ -204,10 +215,6 @@ def write_metadata(metadata_list, output_file):
 
 
 def write_truth_tsv(metadata_list, output_file):
-    """
-    保存GeneID -> TrueState(0=host, 2=foreign)的标签文件。
-    如果插入了HGT，则实际序列ID会添加 _hgt_inserted 后缀。
-    """
     with open(output_file, "w", encoding="utf-8", newline="") as f:
         f.write("GeneID\tTrueState\n")
         for meta in metadata_list:
@@ -216,38 +223,54 @@ def write_truth_tsv(metadata_list, output_file):
             f.write(f"{gene_id}\t{true_state}\n")
     print(f"Truth labels saved to: {output_file}")
 
-def main():
-    try:
-        # 1. 读取外源CDS文件
-        all_records = list(SeqIO.parse(CDS_FILE, "fasta"))
-        print(f"{len(all_records)} total CDS loaded from {CDS_FILE}")
 
-        # 2. 长度筛选
-        filtered_by_length = []
-        for record in all_records:
-            if len(record.seq) >= MIN_CDS_LENGTH:
-                filtered_by_length.append(record)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Filter donor CDS and generate HGT-inserted host test set.")
+    parser.add_argument("--distance", choices=["near", "moderate", "distant"], default="near",
+                        help="Donor evolutionary distance (selects raw CDS file and output subfolder).")
+    return parser.parse_args()
+
+
+def main():
+    args = parse_args()
+    distance = args.distance
+    cds_file = DONOR_RAW_MAP.get(distance)
+    if not cds_file or not os.path.exists(cds_file):
+        raise FileNotFoundError(f"CDS file for distance '{distance}' not found: {cds_file}")
+
+    output_dir = OUTPUT_DIR_TEMPLATE.format(distance=distance)
+    output_filtered = OUTPUT_FILTERED_TEMPLATE.format(distance=distance)
+    output_train = OUTPUT_TRAIN_TEMPLATE.format(distance=distance)
+    output_test = OUTPUT_TEST_TEMPLATE.format(distance=distance)
+    output_ids = OUTPUT_IDS_TEMPLATE.format(distance=distance)
+    output_host_hgt = OUTPUT_HOST_HGT_TEMPLATE.format(distance=distance)
+    output_metadata = OUTPUT_METADATA_TEMPLATE.format(distance=distance)
+    output_truth = OUTPUT_TRUTH_TEMPLATE.format(distance=distance)
+
+    ensure_dirs([
+        output_filtered, output_train, output_test, output_ids,
+        output_host_hgt, output_metadata, output_truth
+    ])
+
+    try:
+        all_records = list(SeqIO.parse(cds_file, "fasta"))
+        print(f"{len(all_records)} total CDS loaded from {cds_file}")
+
+        filtered_by_length = [r for r in all_records if len(r.seq) >= MIN_CDS_LENGTH]
         print(f"{len(filtered_by_length)} CDS remain after length filtering (≥{MIN_CDS_LENGTH} bp)")
 
-        # 3. 序列合法性筛选（仅保留A/T/G/C，N占比≤5%）
         filtered_by_seq_validity = []
         for record in filtered_by_length:
             seq = record.seq
             length = len(seq)
-
-            invalid_chars = [char for char in seq if char not in VALID_NUCLEOTIDES]
-            if invalid_chars:
+            if any(ch not in VALID_NUCLEOTIDES for ch in seq):
                 continue
-            
-            n_count = seq.upper().count("N")
-            n_ratio = n_count / length if length > 0 else 0.0
+            n_ratio = seq.upper().count("N") / length if length > 0 else 0.0
             if n_ratio > N_EVAL_THRESHOLD:
                 continue
-            
             filtered_by_seq_validity.append(record)
         print(f"{len(filtered_by_seq_validity)} CDS remain after sequence validity filtering (N ratio ≤{N_EVAL_THRESHOLD*100}%)")
 
-        # 4. 剔除含移动元件相关关键词的CDS
         filtered_by_mobile = []
         mobile_count = 0
         for record in filtered_by_seq_validity:
@@ -258,34 +281,31 @@ def main():
                 filtered_by_mobile.append(record)
         print(f"{len(filtered_by_mobile)} CDS remain after removing {mobile_count} mobile element-related CDS")
 
-        
         final_filtered_records = filtered_by_mobile
         final_filtered_ids = [record.id for record in final_filtered_records]
 
-        # 5. 保存结果
-        SeqIO.write(final_filtered_records, OUTPUT_FILTERED, "fasta")
-        with open(OUTPUT_IDS, "w", encoding="utf-8") as f:
+        SeqIO.write(final_filtered_records, output_filtered, "fasta")
+        with open(output_ids, "w", encoding="utf-8") as f:
             f.write("\n".join(final_filtered_ids))
 
-        # 6. 拆分训练集和测试集
-        split_train_test(final_filtered_records)
+        split_train_test(final_filtered_records, output_train, output_test)
 
-        # 7. 模拟HGT插入
-        insert_fragments = generate_insert_fragments(OUTPUT_TEST)
+        insert_fragments = generate_insert_fragments(output_test)
         if not insert_fragments:
             raise ValueError("No valid insert fragments generated (check foreign test set length)")
-        
-        inserted_host_records, metadata_list = insert_hgt_into_host(HOST_TEST_FILE, insert_fragments)
-        
-        SeqIO.write(inserted_host_records, OUTPUT_HOST_HGT, "fasta")
-        print(f"Host test set with HGT saved to: {OUTPUT_HOST_HGT}")
 
-        write_metadata(metadata_list, OUTPUT_METADATA)
-        write_truth_tsv(metadata_list, OUTPUT_TRUTH)
+        inserted_host_records, metadata_list = insert_hgt_into_host(HOST_TEST_FILE, insert_fragments)
+
+        SeqIO.write(inserted_host_records, output_host_hgt, "fasta")
+        print(f"Host test set with HGT saved to: {output_host_hgt}")
+
+        write_metadata(metadata_list, output_metadata)
+        write_truth_tsv(metadata_list, output_truth)
 
     except Exception as e:
         print(f"Error: {str(e)}")
         raise
+
 
 if __name__ == "__main__":
     main()

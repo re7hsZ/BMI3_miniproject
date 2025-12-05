@@ -42,64 +42,40 @@ The tool includes a benchmarking script (`src/benchmark.py`) that evaluates perf
 pip install numpy pandas biopython scikit-learn matplotlib seaborn
 ```
 
-## 6. Test Running Instructions
-Synthetic demo (kept separate from real data):
-```bash
-python run_demo.py
-```
-This uses `data/synthetic_eval/demo` as inputs and writes results to `results/synthetic_eval/demo/latest`.
-
-Manual steps (synthetic example):
-- **Train**:
+## 6. Test Running Instructions (real data by distance)
+- Prepare datasets:
+  ```bash
+  python data/scripts/host_cds_filtered.py
+  python data/scripts/donor_cds_filtered.py --distance near
+  python data/scripts/donor_cds_filtered.py --distance moderate
+  python data/scripts/donor_cds_filtered.py --distance distant
+  ```
+- **Train** (example: near; swap distance to moderate/distant as needed):
   ```bash
   python src/main.py train \
-      --host data/synthetic_eval/demo/train_host.fasta \
-      --foreign data/synthetic_eval/demo/train_foreign.fasta \
-      --output results/synthetic_eval/demo/latest/model.pkl
+      --host data/processed/host/host_core_train.fasta \
+      --foreign data/processed/near/donor/foreign_train.fasta \
+      --output results/real/near/hmm_model.pkl \
+      --bw_iters 10 \
+      --context_weight 1.2 \
+      --foreign_prior_floor 0.4
   ```
 - **Predict**:
   ```bash
   python src/main.py predict \
-      --input data/synthetic_eval/demo/test_genome.fasta \
-      --model results/synthetic_eval/demo/latest/model.pkl \
-      --output results/synthetic_eval/demo/latest/predictions.tsv
-  ```
-- **Benchmark**:
-  ```bash
-  python src/benchmark.py \
-      --predictions results/synthetic_eval/demo/latest/predictions.tsv \
-      --output results/synthetic_eval/demo/latest \
-      --fasta data/synthetic_eval/demo/test_genome.fasta
-  ```
-
-Manual steps (real data):
-- Prepare real datasets:
-  ```bash
-  python data/scripts/host_cds_filtered.py
-  python data/scripts/donor_cds_filtered.py   # also writes data/processed/hgt_truth.tsv
-  ```
-- **Train**:
-  ```bash
-  python src/main.py train \
-      --host data/processed/host/host_core_train.fasta \
-      --foreign data/processed/donor/foreign_train.fasta \
-      --output results/real/hmm_model.pkl
-  ```
-- **Predict** (with foreign flagging):
-  ```bash
-  python src/main.py predict \
-      --input data/processed/host_test_with_hgt.fasta \
-      --model results/real/hmm_model.pkl \
-      --output results/real/predictions.tsv \
-      --foreign_threshold 0.5
+      --input data/processed/near/host_test_with_hgt.fasta \
+      --model results/real/near/hmm_model.pkl \
+      --output results/real/near/predictions.tsv \
+      --foreign_threshold 0.2 \
+      --foreign_bias 0.2
   ```
 - **Benchmark (with truth)**:
   ```bash
   python src/benchmark.py \
-      --predictions results/real/predictions.tsv \
-      --truth data/processed/hgt_truth.tsv \
-      --output results/real \
-      --fasta data/processed/host_test_with_hgt.fasta
+      --predictions results/real/near/predictions.tsv \
+      --truth data/processed/near/hgt_truth.tsv \
+      --output results/real/near \
+      --fasta data/processed/near/host_test_with_hgt.fasta
   ```
 
 ## 7. Parameters and Explanation

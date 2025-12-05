@@ -101,7 +101,8 @@ def calculate_local_gc_shift(sequence, genomic_gc):
 
 def extract_context_binary(header, sequence, genomic_gc=0.5):
     gc_shift = calculate_local_gc_shift(sequence, genomic_gc)
-    is_high_gc_shift = 1 if gc_shift > 0.15 else 0
+    # lower threshold to flag more GC shifts
+    is_high_gc_shift = 1 if gc_shift > 0.08 else 0
 
     mobility_keywords = ['transposase', 'integrase', 'conjugal', 'plasmid', 'phage', 'mobile']
     effector_keywords = ['ankyrin', 'f-box', 'u-box', 'sel1', 'legionella effector']

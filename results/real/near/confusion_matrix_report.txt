@@ -1,0 +1,9 @@
+              precision    recall  f1-score   support
+
+        Host       0.99      0.93      0.96       209
+ Ameliorated       0.00      0.00      0.00         0
+     Foreign       1.00      0.94      0.97       487
+
+    accuracy                           0.94       696
+   macro avg       0.66      0.62      0.64       696
+weighted avg       1.00      0.94      0.97       696

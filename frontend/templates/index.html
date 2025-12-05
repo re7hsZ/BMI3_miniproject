@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HGT-Detector: Horizontal Gene Transfer Detection Tool</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <!-- Google Fonts for Scientific/Modern Look -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&family=Montserrat:wght@400;600&display=swap"
+        rel="stylesheet">
+    <!-- Chart.js for Visualizations -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+
+<body>
+
+    <header class="main-header">
+        <div class="container">
+            <h1>HGT-Detector</h1>
+            <p class="subtitle">Horizontal Gene Transfer Detection using Hidden Markov Models</p>
+        </div>
+    </header>
+
+    <main class="container">
+        <!-- Control Panel Section -->
+        <section id="control-panel" class="card">
+            <div class="card-header">
+                <h2>Analysis Configuration</h2>
+            </div>
+            <div class="card-body">
+
+                <!-- Input Method Tabs -->
+                <div class="tabs">
+                    <button class="tab-btn active" data-tab="upload-tab">Upload FASTA</button>
+                    <button class="tab-btn" data-tab="paste-tab">Paste Sequence</button>
+                </div>
+
+                <div class="tab-content">
+                    <!-- Tab 1: Upload -->
+                    <div id="upload-tab" class="tab-pane active">
+                        <div id="drop-zone" class="drop-zone">
+                            <p>Drag & Drop your .fasta or .fa file here</p>
+                            <p>or</p>
+                            <input type="file" id="file-input" accept=".fasta,.fa" hidden>
+                            <button class="btn-secondary" onclick="document.getElementById('file-input').click()">Browse
+                                Files</button>
+                            <p id="file-name" class="file-name"></p>
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Paste -->
+                    <div id="paste-tab" class="tab-pane">
+                        <textarea id="sequence-input" placeholder=">Sequence_ID&#10;ATGCGT..."></textarea>
+                    </div>
+                </div>
+
+                <!-- Evolutionary Model Selection -->
+                <div class="form-group">
+                    <label for="model-select">Select Evolutionary Distance Model <span class="info-icon"
+                            title="Choose the biological context for the analysis">ⓘ</span></label>
+                    <select id="model-select">
+                        <option value="near">Near Range Transfer (e.g., Bacteria-to-Bacteria)</option>
+                        <option value="moderate">Moderate Range Transfer (e.g., Soil Bacteria-to-Host)</option>
+                        <option value="distant">Distant Transfer (e.g., Eukaryote-to-Bacteria)</option>
+                    </select>
+                    <p id="model-description" class="helper-text">Detects transfer between closely related species
+                        (e.g., E. coli to Legionella).</p>
+                </div>
+
+                <div class="action-area">
+                    <button id="analyze-btn" class="btn-primary">Run Analysis</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Dashboard Section (Hidden by default) -->
+        <section id="dashboard" class="dashboard hidden">
+
+            <!-- Summary Card -->
+            <div class="card summary-card">
+                <h3>Classification Result</h3>
+                <div class="result-display">
+                    <div class="result-item">
+                        <span class="label">Total Genes:</span>
+                        <span id="result-total" class="value">--</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="label">Host Genes:</span>
+                        <span id="result-host" class="value host-value">--</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="label">Foreign Genes:</span>
+                        <span id="result-foreign" class="value foreign-value">--</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Visualizations Grid -->
+            <div class="viz-grid">
+                <!-- PCA Plot -->
+                <div class="card viz-card">
+                    <h3>PCA Scatter Plot (Codon Usage)</h3>
+                    <div class="canvas-container">
+                        <canvas id="pcaChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Heatmap -->
+                <div class="card viz-card">
+                    <h3>Posterior Probability Heatmap</h3>
+                    <div class="canvas-container">
+                        <canvas id="heatmapChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Bar Plot -->
+                <div class="card viz-card full-width">
+                    <h3>Gene-level Probabilities</h3>
+                    <div class="canvas-container">
+                        <canvas id="barChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+        </section>
+    </main>
+
+    <footer class="main-footer">
+        <div class="container">
+            <p>&copy; 2025 HGT-Detector Project. BMI Group 4.</p>
+        </div>
+    </footer>
+
+    <script src="{{ url_for('static', filename='js/app.js') }}?v=3"></script>
+</body>
+
+</html>

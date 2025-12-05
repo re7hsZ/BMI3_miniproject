@@ -21,7 +21,30 @@ def _assert_not_hgt_training(headers, source_name):
         raise ValueError(f"Training input {source_name} seems to include HGT-tagged sequences. Use original genome CDS for training.")
 
 
-def train_model(host_file, foreign_file, output_model):
+def _set_priors_and_transitions(hmm, host_count, foreign_count, foreign_prior_floor=0.6):
+    total = max(1, host_count + foreign_count)
+    host_ratio = host_count / total
+    foreign_ratio = foreign_count / total
+    amel_ratio = max(0.2, min(0.35, foreign_ratio * 0.8))
+
+    priors = np.array([
+        max(0.5, host_ratio),
+        amel_ratio,
+        max(foreign_prior_floor, foreign_ratio)
+    ])
+    priors = np.clip(priors, 0.01, None)
+    priors = priors / priors.sum()
+    hmm.pi = priors
+
+    # Adjusted transition matrix: reduce Host-state bias for foreign-heavy datasets
+    hmm.A = np.array([
+        [0.60, 0.20, 0.20],  # Host: allow more transitions to Foreign
+        [0.20, 0.50, 0.30],  # Ameliorated: balanced
+        [0.15, 0.15, 0.70],  # Foreign: allow more exit
+    ])
+
+
+def train_model(host_file, foreign_file, output_model, bw_iters=15, context_weight=2.0, foreign_prior_floor=0.6, temperature=1.5, cov_scale=1.2):
     print(f"Loading host sequences from {host_file}...")
     host_data = load_sequences(host_file)
     print(f"Loading foreign sequences from {foreign_file}...")
@@ -50,12 +73,40 @@ def train_model(host_file, foreign_file, output_model):
     foreign_comp_scaled = scaler.transform(foreign_comp)
 
     print("Initializing HMM (3 States)...")
-    hmm = HMM(n_states=3)
+    hmm = HMM(n_states=3, temperature=temperature, cov_scale=cov_scale)
+    hmm.context_weight = context_weight
     hmm.train_supervised(host_comp_scaled, host_context, foreign_comp_scaled, foreign_context)
+    print(f"[Calibration] temperature={temperature}, cov_scale={cov_scale}")
+
+    _set_priors_and_transitions(hmm, len(host_comp_scaled), len(foreign_comp_scaled), foreign_prior_floor=foreign_prior_floor)
+
+    # Diagnostic: check if host/foreign distributions are separable
+    mean_diff = np.linalg.norm(hmm.means[0] - hmm.means[2])
+    print(f"[Diagnostic] Host mean (first 5):    {hmm.means[0][:5]}")
+    print(f"[Diagnostic] Foreign mean (first 5): {hmm.means[2][:5]}")
+    print(f"[Diagnostic] Mean L2 distance: {mean_diff:.4f}")
+    if mean_diff < 1.0:
+        print("[Warning] Host and Foreign distributions are very close - model may not discriminate well!")
+
+    # NOTE: Baum-Welch on labeled pooled data erases supervised signal.
+    # Keeping this code but disabled by default (set bw_iters=0).
+    # If you want unsupervised refinement, run BW on unlabeled test data instead.
+    if bw_iters and bw_iters > 0:
+        print(f"[Warning] Running Baum-Welch on labeled data may reduce discriminative power.")
+        print(f"Running Baum-Welch refinement for {bw_iters} iterations on pooled observations...")
+        observations = [(host_comp_scaled[i], host_context[i]) for i in range(len(host_comp_scaled))]
+        observations += [(foreign_comp_scaled[i], foreign_context[i]) for i in range(len(foreign_comp_scaled))]
+        hmm.baum_welch_train(observations, max_iters=bw_iters, tol=1e-3, verbose=False)
 
     print(f"Saving model to {output_model}...")
     with open(output_model, 'wb') as f:
-        pickle.dump({'model': hmm, 'scaler': scaler, 'genomic_gc': genomic_gc}, f)
+        pickle.dump({
+            'model': hmm, 
+            'scaler': scaler, 
+            'genomic_gc': genomic_gc,
+            'temperature': temperature,
+            'cov_scale': cov_scale
+        }, f)
     print("Done.")
 
 
@@ -85,7 +136,7 @@ def simulate_genome(host_fasta, foreign_fasta, output_fasta, num_islands=5, phyl
     print("Done.")
 
 
-def predict(input_file, model_file, output_file, foreign_threshold=0.5):
+def predict(input_file, model_file, output_file, foreign_threshold=0.05, foreign_bias=0.5, foreign_log_boost=0.5):
     print(f"Loading model from {model_file}...")
     with open(model_file, 'rb') as f:
         saved_data = pickle.load(f)
@@ -120,8 +171,16 @@ def predict(input_file, model_file, output_file, foreign_threshold=0.5):
         for i, gene_id in enumerate(ids):
             state = path[i]
             probs = posteriors[i]
+            if foreign_log_boost and foreign_log_boost > 0:
+                # boost foreign log-prob, renormalize
+                probs = np.exp(np.log(probs + 1e-12) + np.array([0.0, 0.0, foreign_log_boost]))
+                probs = probs / probs.sum()
+            if foreign_bias and foreign_bias > 0:
+                probs = probs + np.array([0.0, 0.0, foreign_bias])
+                probs = probs / probs.sum()
             foreign_flag = 1 if probs[2] >= foreign_threshold else 0
-            f.write(f"{gene_id}\t{state}\t{probs[0]:.4f}\t{probs[1]:.4f}\t{probs[2]:.4f}\t{foreign_flag}\n")
+            # Keep scientific notation to avoid rounding tiny probabilities to 0.0 in downstream plots
+            f.write(f"{gene_id}\t{state}\t{probs[0]:.6g}\t{probs[1]:.6g}\t{probs[2]:.6g}\t{foreign_flag}\n")
     print("Done.")
 
 
@@ -133,12 +192,19 @@ def main():
     train_parser.add_argument('--host', required=True, help='FASTA file of host genes (original genome, no HGT tags)')
     train_parser.add_argument('--foreign', required=True, help='FASTA file of foreign genes (original donor, no HGT tags)')
     train_parser.add_argument('--output', required=True, help='Output model file (pickle)')
+    train_parser.add_argument('--bw_iters', type=int, default=0, help='Baum-Welch refinement iterations (default: 0 = disabled, prevents erasing supervised signal)')
+    train_parser.add_argument('--context_weight', type=float, default=1.2, help='Weight for context Bernoulli features in emissions (default: 1.2)')
+    train_parser.add_argument('--foreign_prior_floor', type=float, default=0.4, help='Minimum prior mass for foreign state (default: 0.4)')
+    train_parser.add_argument('--temperature', type=float, default=1.5, help='Temperature for probability calibration (default: 1.5, higher = less confident)')
+    train_parser.add_argument('--cov_scale', type=float, default=1.2, help='Covariance inflation factor (default: 1.2, higher = wider distributions)')
 
     predict_parser = subparsers.add_parser('predict', help='Predict HGT genes')
     predict_parser.add_argument('--input', required=True, help='Input FASTA file to analyze')
     predict_parser.add_argument('--model', required=True, help='Trained model file (pickle)')
     predict_parser.add_argument('--output', required=True, help='Output results file (TSV)')
-    predict_parser.add_argument('--foreign_threshold', type=float, default=0.5, help='Threshold on Prob_Foreign to flag segments (default: 0.5)')
+    predict_parser.add_argument('--foreign_threshold', type=float, default=0.05, help='Threshold on Prob_Foreign to flag segments (default: 0.05)')
+    predict_parser.add_argument('--foreign_bias', type=float, default=0.0, help='Additive bias to Prob_Foreign before renormalization (default: 0.0, disabled)')
+    predict_parser.add_argument('--foreign_log_boost', type=float, default=0.0, help='Log-space boost to foreign posterior before renormalization (default: 0.0, disabled)')
 
     sim_parser = subparsers.add_parser('simulate', help='Simulate genome from FASTA files')
     sim_parser.add_argument('--host', required=True, help='Host FASTA file')
@@ -150,9 +216,9 @@ def main():
     args = parser.parse_args()
 
     if args.command == 'train':
-        train_model(args.host, args.foreign, args.output)
+        train_model(args.host, args.foreign, args.output, bw_iters=args.bw_iters, context_weight=args.context_weight, foreign_prior_floor=args.foreign_prior_floor, temperature=args.temperature, cov_scale=args.cov_scale)
     elif args.command == 'predict':
-        predict(args.input, args.model, args.output, foreign_threshold=args.foreign_threshold)
+        predict(args.input, args.model, args.output, foreign_threshold=args.foreign_threshold, foreign_bias=args.foreign_bias, foreign_log_boost=args.foreign_log_boost)
     elif args.command == 'simulate':
         simulate_genome(args.host, args.foreign, args.output, args.islands, phylo_scenario=args.phylo_scenario)
     else:

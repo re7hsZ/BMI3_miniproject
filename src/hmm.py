@@ -2,11 +2,18 @@ import numpy as np
 
 
 class HMM:
-    def __init__(self, n_states=3, n_features=None, n_context_features=None):
-        """3-state HMM: 0=Host, 1=Ameliorated, 2=Foreign."""
+    def __init__(self, n_states=3, n_features=None, n_context_features=None, temperature=1.0, cov_scale=1.0):
+        """3-state HMM: 0=Host, 1=Ameliorated, 2=Foreign.
+        
+        Args:
+            temperature: Softmax temperature for posterior calibration (higher = less confident)
+            cov_scale: Covariance inflation factor (higher = wider emission distributions)
+        """
         self.n_states = n_states
         self.n_features = n_features
         self.n_context_features = n_context_features
+        self.temperature = temperature
+        self.cov_scale = cov_scale
         self.A = np.array([
             [0.95, 0.04, 0.01],
             [0.10, 0.80, 0.10],
@@ -54,21 +61,28 @@ class HMM:
         if self.n_context_features:
             self.bernoulli_params = np.zeros((self.n_states, self.n_context_features))
 
+        # Use getattr for backward compatibility with old models
+        cov_scale = getattr(self, 'cov_scale', 1.0)
+        
+        # Host state (0)
         self.means[0] = np.mean(host_comp, axis=0)
-        self.covars[0] = np.cov(host_comp, rowvar=False)
+        self.covars[0] = np.cov(host_comp, rowvar=False) * cov_scale
         if self.n_context_features:
             self.bernoulli_params[0] = np.mean(host_context, axis=0)
 
+        # Foreign state (2)
         self.means[2] = np.mean(foreign_comp, axis=0)
-        self.covars[2] = np.cov(foreign_comp, rowvar=False)
+        self.covars[2] = np.cov(foreign_comp, rowvar=False) * cov_scale
         if self.n_context_features:
             self.bernoulli_params[2] = np.mean(foreign_context, axis=0)
 
+        # Ameliorated state (1): interpolation between Host and Foreign
         self.means[1] = (self.means[0] + self.means[2]) / 2
         self.covars[1] = (self.covars[0] + self.covars[2]) / 2 + np.eye(self.n_features) * 1e-3
         if self.n_context_features:
             self.bernoulli_params[1] = (self.bernoulli_params[0] + self.bernoulli_params[2]) / 2
 
+        # Add regularization to all covariance matrices
         for i in range(self.n_states):
             self.covars[i] += np.eye(self.n_features) * 1e-4
 
@@ -140,6 +154,14 @@ class HMM:
         log_alpha = self.forward_log(observations)
         log_beta = self.backward_log(observations)
         log_gamma_unnorm = log_alpha + log_beta
+        
+        # Apply temperature scaling for probability calibration
+        # Higher temperature -> softer (less confident) probabilities
+        # Use getattr for backward compatibility with old models
+        temperature = getattr(self, 'temperature', 1.0)
+        if temperature != 1.0:
+            log_gamma_unnorm = log_gamma_unnorm / temperature
+        
         gamma = np.zeros_like(log_gamma_unnorm)
         for t in range(len(observations)):
             log_norm = self._logsumexp(log_gamma_unnorm[t])

@@ -1,108 +1,167 @@
 # HGT Detection with Hidden Markov Models
 
-Three-state HMM pipeline for detecting horizontally transferred genes in bacterial genomes, using composition and context features with both synthetic evaluation data and real datasets.
+Three-state HMM pipeline for detecting horizontally transferred genes in bacterial genomes, using composition and context features on real datasets (near / moderate / distant donors).
 
 ## Overview
-- States: Host, Ameliorated, Foreign
-- Emissions: Gaussian (GC/GC3, RSCU, AA composition) + Bernoulli (GC-shift flag, mobility/effector keywords)
-- Transition bias: Host -> Ameliorated -> Foreign with high self-transition
-- Outputs: per-gene probabilities, foreign flag, and benchmark plots (confusion matrix, ROC, heatmap, barplot)
+- **States:** Host, Ameliorated, Foreign
+- **Emissions:** Gaussian (GC/GC3, RSCU, AA composition) + Bernoulli (GC-shift flag, mobility/effector keywords)
+- **Training:** Supervised initialization with optional Baum-Welch refinement
+- **Outputs:** Per-gene probabilities, foreign flag, and benchmark plots (confusion matrix, ROC, heatmap, barplot)
+
+## Performance
+
+| Distance | Accuracy | Foreign Recall | Foreign Precision |
+|----------|----------|----------------|-------------------|
+| Near     | 96%      | 95%            | 100%              |
+| Moderate | 87%      | 88%            | 96%               |
+| Distant  | 95%      | 95%            | 100%              |
 
 ## Installation
 ```bash
 pip install -r requirements.txt
-cd miniproject
 ```
-
-## Quick Start (synthetic evaluation)
-```bash
-python run_demo.py
-```
-Inputs: `data/synthetic_eval/demo/`  
-Outputs: `results/synthetic_eval/demo/latest/` (model, predictions, plots)
 
 ## Project Structure
 ```
 miniproject/
-├── src/                         # Core code (latest, no suffix)
-│   ├── features.py
-│   ├── hmm.py
-│   ├── simulator.py
-│   ├── benchmark.py
+├── src/                         # Core code
+│   ├── features.py              # Feature extraction (GC, RSCU, AA, context)
+│   ├── hmm.py                   # HMM implementation (train, Viterbi, Forward-Backward)
+│   ├── simulator.py             # Synthetic genome simulation
+│   ├── benchmark.py             # Evaluation metrics and plots
 │   └── main.py                  # CLI for train/predict/simulate
 ├── data/
-│   ├── raw/                     # Real CDS inputs
-│   ├── processed/               # Cleaned real data (host/donor, truth labels)
-│   └── synthetic_eval/demo/     # Synthetic evaluation FASTA files
-├── results/
-│   ├── synthetic_eval/demo/latest/  # Synthetic model/predictions/plots
-│   └── real/                    # Real run outputs
-├── docs/documentation.md        # Technical overview
-├── tests/                       # Unit/sanity tests
-└── run_demo.py                  # Synthetic pipeline
+│   ├── raw/                     # Raw CDS files (near/moderate/distant donors)
+│   ├── processed/               # Cleaned data by distance
+│   │   ├── host/                # Host genome CDS (train/test split)
+│   │   ├── near/donor/          # Near-distance donor CDS
+│   │   ├── moderate/donor/      # Moderate-distance donor CDS
+│   │   └── distant/donor/       # Distant donor CDS
+│   └── scripts/                 # Data preprocessing scripts
+│       ├── host_cds_filtered.py
+│       ├── donor_cds_filtered.py
+│       └── generate_hgt_test.py # Generate test set with complete foreign genes
+├── results/real/                # Model outputs by distance
+│   ├── near/
+│   ├── moderate/
+│   └── distant/
+├── frontend/                    # Flask dashboard (optional)
+├── tests/                       # Unit tests
+└── docs/documentation.md        # Technical documentation
 ```
 
 ## Usage
 
-### Synthetic (manual steps)
+### Step 1: Data Preparation (run once)
+
 ```bash
-python src/main.py train \
-    --host data/synthetic_eval/demo/train_host.fasta \
-    --foreign data/synthetic_eval/demo/train_foreign.fasta \
-    --output results/synthetic_eval/demo/latest/model.pkl
-
-python src/main.py predict \
-    --input data/synthetic_eval/demo/test_genome.fasta \
-    --model results/synthetic_eval/demo/latest/model.pkl \
-    --output results/synthetic_eval/demo/latest/predictions.tsv
-
-python src/benchmark.py \
-    --predictions results/synthetic_eval/demo/latest/predictions.tsv \
-    --output results/synthetic_eval/demo/latest \
-    --fasta data/synthetic_eval/demo/test_genome.fasta
-```
-
-### Real data
-Prep (once):
-```bash
+# Filter host CDS
 python data/scripts/host_cds_filtered.py
-python data/scripts/donor_cds_filtered.py   # writes data/processed/hgt_truth.tsv
+
+# Filter donor CDS for each distance
+python data/scripts/donor_cds_filtered.py --distance near
+python data/scripts/donor_cds_filtered.py --distance moderate
+python data/scripts/donor_cds_filtered.py --distance distant
+
+# Generate test sets with complete foreign genes
+python data/scripts/generate_hgt_test.py --distance near
+python data/scripts/generate_hgt_test.py --distance moderate
+python data/scripts/generate_hgt_test.py --distance distant
 ```
 
-Run:
+### Step 2: Train Model
+
 ```bash
 python src/main.py train \
     --host data/processed/host/host_core_train.fasta \
-    --foreign data/processed/donor/donor_core_train.fasta \
-    --output results/real/hmm_model.pkl
-
-python src/main.py predict \
-    --input data/processed/host_test_with_hgt.fasta \
-    --model results/real/hmm_model.pkl \
-    --output results/real/predictions.tsv \
-    --foreign_threshold 0.5
-
-python src/benchmark.py \
-    --predictions results/real/predictions.tsv \
-    --truth data/processed/hgt_truth.tsv \
-    --output results/real \
-    --fasta data/processed/host_test_with_hgt.fasta
+    --foreign data/processed/distant/donor/foreign_train.fasta \
+    --output results/real/distant/hmm_model.pkl
 ```
 
-Notes:
-- Train only on original genomes (no HGT tags); `main.py` checks headers.
-- Predictions include `ForeignFlag` (1 if `Prob_Foreign` >= threshold).
-- `simulate` supports `--phylo_scenario {near,mid,far}` to choose GC targets matching biologically plausible donors.
+**Training options:**
+- `--bw_iters N` - Baum-Welch iterations (default: 0, disabled to preserve supervised signal)
+- `--context_weight W` - Weight for context features (default: 1.2)
+- `--foreign_prior_floor F` - Minimum prior for foreign state (default: 0.4)
 
-## Customization
-- Transition/context weights: `src/hmm.py`
-- Feature thresholds/PCA components: `src/features.py`
-- Simulation GC targets/islands: `src/simulator.py`
+### Step 3: Predict
+
+```bash
+python src/main.py predict \
+    --input data/processed/distant/host_test_with_hgt.fasta \
+    --model results/real/distant/hmm_model.pkl \
+    --output results/real/distant/predictions.tsv
+```
+
+**Prediction options:**
+- `--foreign_threshold T` - Threshold for ForeignFlag (default: 0.05)
+- `--foreign_bias B` - Additive bias to Prob_Foreign (default: 0.0)
+- `--foreign_log_boost L` - Log-space boost to foreign (default: 0.0)
+
+### Step 4: Benchmark
+
+```bash
+python src/benchmark.py \
+    --predictions results/real/distant/predictions.tsv \
+    --truth data/processed/distant/hgt_truth.tsv \
+    --output results/real/distant
+```
+
+**Outputs:** `confusion_matrix.png`, `roc_curve.png`, `heatmap.png`, `barplot.png`, `confusion_matrix_report.txt`
+
+## Quick Run (All Distances)
+
+```bash
+# Near
+python src/main.py train --host data/processed/host/host_core_train.fasta --foreign data/processed/near/donor/foreign_train.fasta --output results/real/near/hmm_model.pkl
+python src/main.py predict --input data/processed/near/host_test_with_hgt.fasta --model results/real/near/hmm_model.pkl --output results/real/near/predictions.tsv
+python src/benchmark.py --predictions results/real/near/predictions.tsv --truth data/processed/near/hgt_truth.tsv --output results/real/near
+
+# Moderate
+python src/main.py train --host data/processed/host/host_core_train.fasta --foreign data/processed/moderate/donor/foreign_train.fasta --output results/real/moderate/hmm_model.pkl
+python src/main.py predict --input data/processed/moderate/host_test_with_hgt.fasta --model results/real/moderate/hmm_model.pkl --output results/real/moderate/predictions.tsv
+python src/benchmark.py --predictions results/real/moderate/predictions.tsv --truth data/processed/moderate/hgt_truth.tsv --output results/real/moderate
+
+# Distant
+python src/main.py train --host data/processed/host/host_core_train.fasta --foreign data/processed/distant/donor/foreign_train.fasta --output results/real/distant/hmm_model.pkl
+python src/main.py predict --input data/processed/distant/host_test_with_hgt.fasta --model results/real/distant/hmm_model.pkl --output results/real/distant/predictions.tsv
+python src/benchmark.py --predictions results/real/distant/predictions.tsv --truth data/processed/distant/hgt_truth.tsv --output results/real/distant
+```
+
+## Frontend Dashboard (Optional)
+
+```bash
+cd frontend && python app.py
+```
+Open `http://127.0.0.1:5000` → Select model → Upload FASTA → Run Analysis
 
 ## Output Format
-`predictions.tsv`: GeneID, State (0/1/2), Prob_Host, Prob_Ameliorated, Prob_Foreign, ForeignFlag
+
+`predictions.tsv`:
+| Column | Description |
+|--------|-------------|
+| GeneID | Gene identifier |
+| State | Predicted state (0=Host, 1=Ameliorated, 2=Foreign) |
+| Prob_Host | Posterior probability of Host state |
+| Prob_Ameliorated | Posterior probability of Ameliorated state |
+| Prob_Foreign | Posterior probability of Foreign state |
+| ForeignFlag | 1 if Prob_Foreign ≥ threshold, else 0 |
+
+## Customization
+
+- **Transition matrix:** `src/main.py` → `_set_priors_and_transitions()`
+- **Feature weights:** `src/hmm.py` → `context_weight` parameter
+- **Emission distributions:** `src/hmm.py` → `_log_emission_prob()`
+- **Simulation parameters:** `src/simulator.py` → `PHYLO_SCENARIOS`
 
 ## Limitations
-- Depends on labeled host/foreign sets for good initialization.
-- Context features rely on informative headers.
-- Highly ameliorated genes remain challenging.
+
+- Requires labeled host/foreign training sets for supervised initialization
+- Context features depend on informative FASTA headers
+- Moderate-distance detection is more challenging due to overlapping feature distributions
+- Ameliorated genes (foreign genes that have adapted to host GC) remain difficult to detect
+
+## Tests
+
+```bash
+python -m pytest tests/test_core.py -v
+```
